@@ -1,0 +1,31 @@
+Utilisation du script gentooinstall
+
+1) Vérifier le disque cible
+
+lsblk
+
+2) Lancer en mode simulation (sans exécuter les commandes destructrices)
+
+sudo python3 gentooinstall.py --dry-run --disk /dev/sda --boot-mode auto --yes
+
+3) Lancer une installation réelle en UEFI
+
+sudo python3 gentooinstall.py --disk /dev/nvme0n1 --boot-mode uefi --yes --init openrc
+
+4) Lancer une installation réelle en BIOS/Legacy
+
+sudo python3 gentooinstall.py --disk /dev/sda --boot-mode bios --yes --init openrc
+
+5) Lancer avec une URL de stage3 fournie directement
+
+sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --yes --stage3-url https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-openrc/stage3-amd64-openrc-20240630T170447Z.tar.xz
+
+6) Utiliser un autre point de montage
+
+sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --target-dir /mnt/gentoo --yes
+
+Notes importantes
+- Ce script efface le disque sélectionné.
+- Vérifiez bien le disque avant de confirmer.
+- Le mode --dry-run permet de tester la planification sans toucher le système.
+- Le mode auto détecte automatiquement l’environnement UEFI si disponible.
