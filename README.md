@@ -1,90 +1,114 @@
 # gentooinstall
 
-Assistant d’installation Gentoo inspiré du style d’Archinstall.
+Assistant d'installation Gentoo guidé, inspiré de `setup-alpine` (Alpine Linux) et
+d'`archinstall` (Arch Linux).
 
 ## Objectif
 
-Ce script automatise la majeure partie d’une installation Gentoo sur un disque cible :
+L'assistant pose une suite de questions (avec valeurs par défaut) puis automatise
+l'installation complète :
 
-- sélection du disque
-- détection ou choix du mode de démarrage (UEFI ou BIOS/legacy)
-- partitionnement compatible avec le mode sélectionné
-- formatage des partitions
-- montage dans /mnt/gentoo
-- téléchargement d’un stage3
-- extraction du système
-- génération du fichier fstab
-- création du script de chroot final
+- clavier, nom d'hôte, fuseau horaire, locale
+- réseau (DHCP ou statique, via netifrc ou NetworkManager)
+- partitionnement **simple ou avancé** (swap, `/home` séparé, LUKS, LVM)
+- choix du système de fichiers (ext4, btrfs, xfs)
+- téléchargement, vérification SHA256 et extraction du stage3
+- sélection du profil / bureau (minimal, Xfce, GNOME, KDE Plasma)
+- noyau `gentoo-kernel-bin` et initramfs adapté (LUKS/LVM)
+- création d'un utilisateur non-root, mot de passe, `sudo`
+- chargeur d'amorçage GRUB ou systemd-boot
+- finalisation dans le chroot
 
 ## Prérequis
 
-- Linux avec les outils suivants disponibles :
-  - lsblk
-  - parted
-  - wipefs
-  - mkfs.fat
-  - mkfs.ext4
-  - blkid
-  - wget
-  - tar
-  - chroot
-  - openssl (uniquement si vous utilisez `--root-password`)
+- Linux x86_64 avec les outils suivants :
+  - `lsblk`, `parted`, `wipefs`, `mkfs.fat`, `mkfs.ext4`/`mkfs.btrfs`/`mkfs.xfs`, `blkid`
+  - `wget`, `tar`, `chroot`, `openssl`
+  - `cryptsetup` et `lvm2` si vous activez LUKS/LVM
 - droits root
 - une connexion réseau active
 
 ## Utilisation
 
-1. Vérifiez que le disque cible est bien le bon disque.
-2. Lancez le script en root :
-
 ```bash
-sudo python3 gentooinstall.py
+sudo python3 gentooinstall.py            # assistant interactif
+sudo python3 gentooinstall.py --dry-run  # simulation (récapitulatif seul)
 ```
 
-3. Suivez les prompts interactifs.
-4. Copiez l’URL du stage3 Gentoo depuis les mirrors officiels.
-5. Une fois la configuration faite, le script entre dans le chroot et lance la finalisation automatique.
+L'assistant vous guide pas à pas. À titre d'exemple de flux :
+
+```text
+Disposition clavier (keymap) [fr] :
+Nom d'hôte [gentoo] :
+Fuseau horaire [Europe/Paris] :
+Locale principale [fr_FR.UTF-8] :
+Service réseau
+  1) netifrc (OpenRC, simple) (défaut)
+  2) NetworkManager
+Choix [netifrc] :
+Profil / bureau
+  1) Minimal (console) (défaut)
+  2) Xfce
+  3) GNOME
+  4) KDE Plasma
+...
+Chiffrer la racine avec LUKS ? [o/N] :
+```
 
 ## Options principales
 
+Toutes les réponses peuvent être fournies en ligne de commande pour un
+fonctionnement **non interactif** (`--yes`).
+
 - `--disk /dev/sdX` : disque cible (sinon sélection interactive).
-- `--boot-mode {auto,uefi,bios}` : mode de démarrage (par défaut `auto`).
+- `--boot-mode {auto,uefi,bios}` : mode de démarrage (défaut `auto`).
 - `--stage3-url URL` : URL directe du stage3.
-- `--target-dir CHEMIN` : point de montage (par défaut `/mnt/gentoo`).
-- `--root-password MOTDEPASSE` : définit le mot de passe root sans interaction (via `openssl passwd`). Attention : visible dans l'historique du shell et `ps`.
-- `--yes` : confirme l'effacement du disque sans prompt.
+- `--target-dir CHEMIN` : point de montage (défaut `/mnt/gentoo`).
+- `--hostname`, `--keymap`, `--timezone`, `--locale` : identité du système.
+- `--username` : utilisateur non-root à créer.
+- `--desktop {minimal,xfce,gnome,kde}` : profil de bureau.
+- `--filesystem {ext4,btrfs,xfs}` : système de fichiers racine.
+- `--swap {none,partition,file}` : type de swap.
+- `--separate-home` / `--no-separate-home` : partition `/home` dédiée.
+- `--luks` / `--no-luks` : chiffrement LUKS de la racine.
+- `--lvm` / `--no-lvm` : gestion par LVM.
+- `--bootloader {grub,systemd-boot}` : chargeur d'amorçage.
+- `--network-service {netifrc,networkmanager}`, `--network-mode {dhcp,static}`.
+- `--ip`, `--gateway`, `--dns` : réseau statique.
+- `--root-password`, `--user-password`, `--luks-passphrase` : secrets (non interactif).
+- `--yes` : non interactif (accepte défauts/flags).
 - `--force` : autorise l'effacement du disque hébergeant le système en cours.
-- `--dry-run` : affiche la planification sans exécuter de commande.
+- `--dry-run` : affiche le récapitulatif sans exécuter de commande.
+
+Exemple non interactif (UEFI, Xfce, LUKS + LVM) :
+
+```bash
+sudo python3 gentooinstall.py \
+  --disk /dev/nvme0n1 --boot-mode uefi --desktop xfce \
+  --luks --lvm --separate-home --swap partition \
+  --username bob --root-password '...' --user-password '...' --luks-passphrase '...' \
+  --stage3-url https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-openrc/stage3-amd64-openrc-20261011T170049Z.tar.xz \
+  --yes
+```
 
 ## Points importants
 
-- Le script efface le disque sélectionné.
-- Il supporte le mode UEFI et le mode BIOS/legacy.
-- Il refuse d'effacer un disque qui héberge le système en cours d'exécution, sauf si l'option `--force` est utilisée.
-- Le disque cible est vérifié comme périphérique bloc valide avant toute opération destructive.
-- Par défaut, le mot de passe root est défini interactivement (`passwd`) dans le chroot. L'option `--root-password` permet de le définir sans interaction.
-- Seul **OpenRC** est pris en charge : le script ne gère pas systemd.
-- Il est recommandé de vérifier plusieurs fois le disque et le nom du périphérique avant de confirmer.
-- Les commandes sont exécutées avec un risque de destruction si le disque cible est mal choisi.
-
-## Exemple de flux
-
-```text
-=== Assistant d'Installation Gentoo (Style Archinstall) ===
-
-Disques disponibles :
-  1) /dev/sda
-  2) /dev/nvme0n1
-Choisissez le numéro du disque cible : 1
-ATTENTION : Toutes les données sur /dev/sda seront effacées ! Continuer ? (oui/non) : oui
-```
+- Le script **efface** le disque sélectionné.
+- Il refuse d'effacer un disque qui héberge le système en cours, sauf avec `--force`.
+- Le disque cible est vérifié comme périphérique bloc valide avant toute opération.
+- Seul **OpenRC** est pris en charge (systemd n'est pas automatisé).
+- Avec LUKS, un `/boot` non chiffré est créé automatiquement (sauf avec systemd-boot,
+  qui utilise l'ESP montée sur `/boot`).
+- Les options de stockage avancé (LUKS/LVM) sont **expérimentales** : testez-les en
+  machine virtuelle avant un usage réel.
 
 ## Limites actuelles
 
-- le script est pensé pour un environnement Gentoo standard et une machine x86_64
-- seul OpenRC est pris en charge (systemd n'est pas automatisé)
-- la signature numérique PGP du stage3 n'est pas vérifiée (seul le SHA256 l'est)
-- la configuration GRUB BIOS/UEFI est adaptée au mode choisi, mais il reste conseillé de vérifier le résultat final avant le reboot
+- pensé pour un environnement Gentoo standard x86_64
+- seul OpenRC est pris en charge
+- la signature PGP du stage3 n'est pas vérifiée (seul le SHA256 l'est)
+- les chemins LUKS/LVM et le rendu du bootloader méritent une validation en VM
+- les valeurs `swap_size`/`home_size` sont des défauts internes (`4G`/`50G`)
 
 ## Licence
 

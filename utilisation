@@ -1,42 +1,58 @@
 Utilisation du script gentooinstall
 
+L'assistant est guidé (style setup-alpine) : lancez-le et répondez aux questions.
+Toutes les réponses sont aussi disponibles en options pour un usage non interactif.
+
 1) Vérifier le disque cible
 
 lsblk
 
-2) Lancer en mode simulation (sans exécuter les commandes destructrices)
+2) Assistant interactif (recommandé)
 
-sudo python3 gentooinstall.py --dry-run --disk /dev/sda --boot-mode auto --yes
+sudo python3 gentooinstall.py
+
+3) Simulation (n'exécute aucune commande destructive)
+
+sudo python3 gentooinstall.py --dry-run --disk /dev/sda
 
 Le mode --dry-run ne nécessite pas root : il peut aussi être lancé sans sudo.
 
-3) Lancer une installation réelle en UEFI
+4) Installation non interactive, exemple UEFI minimal
 
-sudo python3 gentooinstall.py --disk /dev/nvme0n1 --boot-mode uefi --yes
+sudo python3 gentooinstall.py \
+  --disk /dev/nvme0n1 --boot-mode uefi --desktop minimal \
+  --root-password "MotDePasseRoot" --user-password "MotDePasseUser" \
+  --stage3-url https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-openrc/stage3-amd64-openrc-20261011T170049Z.tar.xz \
+  --yes
 
-4) Lancer une installation réelle en BIOS/Legacy
+5) Installation UEFI avec bureau Xfce
 
-sudo python3 gentooinstall.py --disk /dev/sda --boot-mode bios --yes
+sudo python3 gentooinstall.py --disk /dev/nvme0n1 --boot-mode uefi --desktop xfce --yes \
+  --root-password "..." --user-password "..." --stage3-url <URL>
 
-5) Lancer avec une URL de stage3 fournie directement
+6) Installation BIOS/Legacy
 
-sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --yes --stage3-url https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-openrc/stage3-amd64-openrc-20240630T170447Z.tar.xz
+sudo python3 gentooinstall.py --disk /dev/sda --boot-mode bios --desktop minimal --yes \
+  --root-password "..." --user-password "..." --stage3-url <URL>
 
-6) Définir le mot de passe root sans interaction
+7) Disques avancés (expérimental) : LUKS + LVM + /home séparé + swap
 
-sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --yes --root-password "MonMotDePasse"
+sudo python3 gentooinstall.py --disk /dev/nvme0n1 --boot-mode uefi \
+  --luks --lvm --separate-home --swap partition --filesystem ext4 \
+  --bootloader grub --username bob \
+  --root-password "..." --user-password "..." --luks-passphrase "..." \
+  --stage3-url <URL> --yes
 
-Attention : le mot de passe est visible dans l'historique du shell et dans "ps".
-Sans cette option, "passwd" est demandé interactivement dans le chroot.
+Sans LVM, LUKS implique que la swap devient un fichier et que /home n'est pas séparé
+(l'assistant ajuste et le signale).
 
-7) Utiliser un autre point de montage
+8) Afficher toutes les options
 
-sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --target-dir /mnt/gentoo --yes
+python3 gentooinstall.py --help
 
 Notes importantes
 - Ce script efface le disque sélectionné.
-- Vérifiez bien le disque avant de confirmer.
-- Le script refuse d'effacer un disque qui héberge le système en cours ; utilisez --force uniquement si c'est voulu.
+- Il refuse d'effacer un disque qui héberge le système en cours ; utilisez --force uniquement si c'est voulu.
 - Seul OpenRC est pris en charge (systemd n'est pas automatisé).
-- Le mode --dry-run permet de tester la planification sans toucher le système.
 - Le mode auto détecte automatiquement l'environnement UEFI si disponible.
+- Les options LUKS/LVM sont expérimentales : à valider en machine virtuelle.
