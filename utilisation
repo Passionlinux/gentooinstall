@@ -39,7 +39,7 @@ sudo python3 gentooinstall.py --disk /dev/sda --boot-mode bios --desktop minimal
 
 sudo python3 gentooinstall.py --disk /dev/nvme0n1 --boot-mode uefi \
   --luks --lvm --separate-home --swap partition --filesystem ext4 \
-  --bootloader grub --username bob \
+  --username bob \
   --root-password "..." --user-password "..." --luks-passphrase "..." \
   --stage3-url <URL> --yes
 

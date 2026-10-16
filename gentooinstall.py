@@ -69,7 +69,6 @@ def parse_args(argv=None):
     parser.add_argument("--username", help="Nom de l'utilisateur non-root (défaut : gentoo)")
     parser.add_argument("--desktop", choices=sorted(DESKTOPS), help="Profil de bureau")
     parser.add_argument("--filesystem", choices=["ext4", "btrfs", "xfs"], help="Système de fichiers racine")
-    parser.add_argument("--bootloader", choices=["grub", "systemd-boot"], help="Chargeur d'amorçage")
     parser.add_argument("--swap", choices=["none", "partition", "file"], help="Type de swap")
     parser.add_argument("--network-mode", choices=["dhcp", "static"], help="Configuration réseau")
     parser.add_argument("--network-service", choices=["netifrc", "networkmanager"], help="Service réseau")
@@ -289,15 +288,13 @@ def build_partition_plan(cfg):
     parts = []
     cursor = 1  # MiB
     uefi = cfg.boot_mode == "uefi"
-    uses_esp_as_boot = uefi and cfg.bootloader == "systemd-boot"
 
     if uefi:
         parts.append({"role": "esp", "start": cursor, "end": cursor + 512, "fs": "fat32", "flags": ["esp", "boot"]})
         cursor += 512
 
-    # Avec LUKS, il faut un /boot non chiffré lisible par le chargeur (sauf si
-    # systemd-boot utilise directement l'ESP montée sur /boot).
-    if cfg.luks and not uses_esp_as_boot:
+    # Avec LUKS, il faut un /boot non chiffré lisible par GRUB.
+    if cfg.luks:
         parts.append({"role": "boot", "start": cursor, "end": cursor + 512, "fs": cfg.filesystem,
                       "flags": ["boot"] if not uefi else []})
         cursor += 512
@@ -342,7 +339,6 @@ class Config:
         self.disk = kwargs.get("disk", "")
         self.boot_mode = kwargs.get("boot_mode", "auto")
         self.filesystem = kwargs.get("filesystem", "ext4")
-        self.bootloader = kwargs.get("bootloader", "grub")
         self.swap = kwargs.get("swap", "none")
         self.swap_size = kwargs.get("swap_size", "4G")
         self.separate_home = kwargs.get("separate_home", False)
@@ -366,10 +362,6 @@ class Config:
         self.user_password = kwargs.get("user_password", "")
         self.stage3_url = kwargs.get("stage3_url", "")
         self.target_dir = kwargs.get("target_dir", "/mnt/gentoo")
-
-    @property
-    def esp_mount(self):
-        return "/boot" if (self.boot_mode == "uefi" and self.bootloader == "systemd-boot") else "/efi"
 
 
 # ---------------------------------------------------------------------------
@@ -534,15 +526,9 @@ def build_config(args):
     if cfg.luks:
         cfg.luks_passphrase = resolve_secret(args, "luks_passphrase", "Phrase secrète LUKS", confirm=True)
     cfg.lvm = resolve_bool(args, "lvm", "Utiliser LVM ?", False)
-    normalize_config(cfg)
 
-    # Chargeur d'amorçage
-    bootloader_options = [("grub", "GRUB")]
-    if cfg.boot_mode == "uefi":
-        bootloader_options.append(("systemd-boot", "systemd-boot (UEFI)"))
-    cfg.bootloader = resolve_choice(
-        args, "bootloader", "Chargeur d'amorçage", bootloader_options, "grub"
-    )
+    # Le chargeur d'amorçage est GRUB ; on ajuste les combinaisons incompatibles.
+    normalize_config(cfg)
 
     # Stage3
     cfg.stage3_url = resolve_stage3_url(args)
@@ -558,9 +544,6 @@ def normalize_config(cfg):
         if cfg.swap == "partition":
             print("[Info] Avec LUKS sans LVM, la swap devient un fichier : option ajustée.")
             cfg.swap = "file"
-    if cfg.bootloader == "systemd-boot" and cfg.boot_mode != "uefi":
-        print("[Info] systemd-boot nécessite l'UEFI : retour à GRUB.")
-        cfg.bootloader = "grub"
 
 
 def resolve_disk(args):
@@ -669,10 +652,10 @@ def setup_storage(cfg, plan, target_dir):
     state["mounts"].append(str(target_dir))
 
     if cfg.boot_mode == "uefi":
-        esp_dir = target_dir / cfg.esp_mount.lstrip("/")
+        esp_dir = target_dir / "efi"
         esp_dir.mkdir(parents=True, exist_ok=True)
         run(["mount", devices["esp"], str(esp_dir)])
-        state["fstab"].append((f"UUID={blkid_uuid(devices['esp'])}", cfg.esp_mount, "vfat", "defaults", 0, 2))
+        state["fstab"].append((f"UUID={blkid_uuid(devices['esp'])}", "/efi", "vfat", "defaults", 0, 2))
 
     if "boot" in devices:
         boot_dir = target_dir / "boot"
@@ -700,8 +683,12 @@ def setup_storage(cfg, plan, target_dir):
 def create_swap_file(cfg, target_dir):
     mib = size_to_mib(cfg.swap_size)
     swap_path = target_dir / "swapfile"
+    # Sur btrfs, l'attribut « no COW » doit être posé AVANT toute écriture, sinon
+    # swapon refuse le fichier. On crée donc le fichier vide, on pose l'attribut,
+    # puis seulement on écrit les données.
+    swap_path.touch()
     if cfg.filesystem == "btrfs":
-        run(["chattr", "+C", str(swap_path)], check=False)
+        run(["chattr", "+C", str(swap_path)])
     run(["dd", "if=/dev/zero", f"of={swap_path}", "bs=1M", f"count={mib}", "status=none"])
     os.chmod(swap_path, 0o600)
     run(["mkswap", str(swap_path)])
@@ -809,7 +796,7 @@ def write_base_config(cfg, target):
 # Script de chroot
 # ---------------------------------------------------------------------------
 
-def build_chroot_script(cfg, root_password_hash=None, user_password_hash=None, luks_uuid=None):
+def build_chroot_script(cfg, root_password_hash=None, user_password_hash=None):
     desktop = DESKTOPS[cfg.desktop]
     lines = [
         "#!/bin/bash",
@@ -852,11 +839,7 @@ def build_chroot_script(cfg, root_password_hash=None, user_password_hash=None, l
         "",
     ]
 
-    packages = list(desktop["packages"]) + ["app-admin/sudo"]
-    if cfg.bootloader == "systemd-boot":
-        packages.append("sys-boot/systemd-boot")
-    else:
-        packages.append("sys-boot/grub")
+    packages = list(desktop["packages"]) + ["app-admin/sudo", "sys-boot/grub"]
     if cfg.network_service == "networkmanager":
         packages += ["net-misc/networkmanager", "net-wireless/wpa_supplicant"]
     elif cfg.network_mode == "dhcp":
@@ -903,36 +886,14 @@ def build_chroot_script(cfg, root_password_hash=None, user_password_hash=None, l
         lines.append("rc-update add display-manager default")
 
     lines += ["", 'echo ">>> Installation du chargeur d\'amorçage..."']
-    if cfg.bootloader == "systemd-boot":
-        lines += [
-            "bootctl --esp-path=/boot install",
-            "printf 'default gentoo\\ntimeout 3\\n' > /boot/loader/loader.conf",
-            "KVER=$(ls /boot/vmlinuz-* 2>/dev/null | sed 's#.*/vmlinuz-##' | head -n1)",
-            "{",
-            '  echo "title Gentoo"',
-            '  echo "linux /vmlinuz-$KVER"',
-            '  [ -e "/boot/initramfs-$KVER.img" ] && echo "initrd /initramfs-$KVER.img"',
-            f'  echo "options {build_kernel_cmdline(cfg, luks_uuid)}"',
-            "} > /boot/loader/entries/gentoo.conf",
-        ]
+    if cfg.boot_mode == "uefi":
+        lines.append("grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=Gentoo")
     else:
-        if cfg.boot_mode == "uefi":
-            lines.append("grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=Gentoo")
-        else:
-            lines.append(f"grub-install --target=i386-pc {shlex.quote(cfg.disk)}")
-        lines.append("grub-mkconfig -o /boot/grub/grub.cfg")
+        lines.append(f"grub-install --target=i386-pc {shlex.quote(cfg.disk)}")
+    lines.append("grub-mkconfig -o /boot/grub/grub.cfg")
 
     lines += ["", "sync", 'echo ">>> Installation terminée avec succès."']
     return "\n".join(lines) + "\n"
-
-
-def build_kernel_cmdline(cfg, luks_uuid=None):
-    params = []
-    if cfg.luks and luks_uuid:
-        params.append(f"rd.luks.uuid={luks_uuid}")
-    if cfg.lvm:
-        params.append("rd.lvm.vg=vg0")
-    return " ".join(params)
 
 
 def write_grub_cmdline(cfg, target, luks_uuid):
@@ -955,7 +916,7 @@ def print_summary(cfg):
     print("\n=== Récapitulatif de l'installation ===")
     print(f"  Disque           : {cfg.disk}")
     print(f"  Mode de démarrage: {cfg.boot_mode}")
-    print(f"  Chargeur         : {cfg.bootloader}")
+    print(f"  Chargeur         : GRUB")
     print(f"  Système fichiers : {cfg.filesystem}")
     print(f"  Swap             : {cfg.swap}")
     print(f"  /home séparé     : {'oui' if cfg.separate_home else 'non'}")
@@ -971,18 +932,35 @@ def print_summary(cfg):
     print("=======================================")
 
 
+def verify_sha256(url, target_dir):
+    """Vérifie le SHA256 du stage3 si un fichier de somme exploitable est présent.
+
+    Retourne True si la vérification a été effectuée, False sinon (avertissement
+    et poursuite de l'installation).
+    """
+    archive_name = url.rsplit("/", 1)[-1]
+    sig_name = f"{archive_name}.sha256"
+    sig_path = target_dir / sig_name
+    run(["wget", "-O", str(sig_path), f"{url}.sha256"], check=False)
+
+    # wget crée un fichier vide quand l'URL est introuvable : lancer
+    # « sha256sum -c » sur un fichier vide échoue et interrompt l'installation.
+    if not sig_path.exists() or sig_path.stat().st_size == 0:
+        sig_path.unlink(missing_ok=True)
+        print("[Avertissement] Fichier de hachage absent ou vide, poursuite sans vérification.")
+        return False
+
+    run(["sha256sum", "-c", sig_name], cwd=target_dir)
+    return True
+
+
 def download_and_extract(cfg, target_dir):
     archive_name = cfg.stage3_url.rsplit("/", 1)[-1]
     archive_path = target_dir / archive_name
     run(["wget", "-O", str(archive_path), cfg.stage3_url])
 
     print("\n--- Vérification de l'intégrité (SHA256) ---")
-    sig_path = target_dir / f"{archive_name}.sha256"
-    run(["wget", "-O", str(sig_path), f"{cfg.stage3_url}.sha256"], check=False)
-    if sig_path.exists():
-        run(["sha256sum", "-c", sig_path.name], cwd=target_dir)
-    else:
-        print("[Avertissement] Fichier de hachage non trouvé, continuation sans vérification.")
+    verify_sha256(cfg.stage3_url, target_dir)
 
     print(f"\n--- Extraction de {archive_name} ---")
     run(["tar", "--xattrs-include=*.*", "--numeric-owner", "-xf", archive_name], cwd=target_dir)
@@ -1056,7 +1034,7 @@ def main(argv=None):
     print("\n--- Génération du script de chroot ---")
     root_password_hash = hash_password(cfg.root_password)
     user_password_hash = hash_password(cfg.user_password)
-    chroot_script = build_chroot_script(cfg, root_password_hash, user_password_hash, state["luks_uuid"])
+    chroot_script = build_chroot_script(cfg, root_password_hash, user_password_hash)
     script_path = target_dir / "install_chroot.sh"
     script_path.write_text(chroot_script)
     run(["chmod", "+x", str(script_path)])

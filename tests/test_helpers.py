@@ -2,6 +2,7 @@ import shutil
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from gentooinstall import (
     Config,
@@ -9,6 +10,7 @@ from gentooinstall import (
     build_partition_paths,
     build_partition_plan,
     choose_boot_mode,
+    create_swap_file,
     enable_locales,
     ensure_clean_target,
     hash_password,
@@ -19,6 +21,7 @@ from gentooinstall import (
     partition_suffix_for_device,
     size_to_mib,
     validate_stage3_url,
+    verify_sha256,
     write_fstab,
 )
 
@@ -98,10 +101,6 @@ class GentooInstallTests(unittest.TestCase):
         self.assertFalse(cfg.separate_home)
         self.assertEqual(cfg.swap, "file")
 
-    def test_esp_mount_depends_on_bootloader(self):
-        self.assertEqual(Config(boot_mode="uefi", bootloader="grub").esp_mount, "/efi")
-        self.assertEqual(Config(boot_mode="uefi", bootloader="systemd-boot").esp_mount, "/boot")
-
     def test_ensure_clean_target_creates_missing_dir(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             target = Path(tmp_dir) / "gentoo"
@@ -137,17 +136,11 @@ class GentooInstallTests(unittest.TestCase):
 
     def test_build_chroot_script_with_hashes(self):
         cfg = Config(disk="/dev/sda", boot_mode="bios", desktop="minimal", username="bob")
-        script = build_chroot_script(cfg, "$6$root", "$6$user", None)
+        script = build_chroot_script(cfg, "$6$root", "$6$user")
         self.assertIn("usermod -p '$6$root' root", script)
         self.assertIn("chpasswd -e", script)
         self.assertIn("grub-install --target=i386-pc /dev/sda", script)
         self.assertIn("net.lo /etc/init.d/net.", script)
-
-    def test_build_chroot_script_systemd_boot_cmdline(self):
-        cfg = Config(disk="/dev/nvme0n1", boot_mode="uefi", bootloader="systemd-boot", luks=True)
-        script = build_chroot_script(cfg, "$6$r", "$6$u", "LUKS-UUID")
-        self.assertIn("rd.luks.uuid=LUKS-UUID", script)
-        self.assertIn("bootctl --esp-path=/boot install", script)
 
     def test_parse_args_supports_non_interactive_options(self):
         args = parse_args(
@@ -171,6 +164,70 @@ class GentooInstallTests(unittest.TestCase):
     def test_hash_password_produces_sha512_crypt(self):
         hashed = hash_password("un-mot-de-passe")
         self.assertTrue(hashed.startswith("$6$"))
+
+
+class RegressionTests(unittest.TestCase):
+    """Non-régressions sur les bugs identifiés lors de la revue."""
+
+    def test_partition_plan_uefi_luks_keeps_separate_boot(self):
+        # GRUB requiert un /boot non chiffré : UEFI + LUKS doit le créer.
+        cfg = Config(disk="/dev/nvme0n1", boot_mode="uefi", luks=True)
+        roles = [part["role"] for part in build_partition_plan(cfg)]
+        self.assertEqual(roles, ["esp", "boot", "root"])
+
+    def test_verify_sha256_skips_empty_download(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir)
+            sig = target / "stage3-amd64-openrc.tar.xz.sha256"
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[0] == "wget":
+                    sig.write_bytes(b"")  # wget crée un fichier vide sur 404
+                return 0
+
+            with mock.patch("gentooinstall.run", side_effect=fake_run):
+                checked = verify_sha256(
+                    "https://example.com/stage3-amd64-openrc.tar.xz", target
+                )
+
+            self.assertFalse(checked)
+            self.assertFalse(any(cmd[0] == "sha256sum" for cmd in calls))
+            self.assertFalse(sig.exists())
+
+    def test_verify_sha256_runs_when_file_present(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir)
+            sig = target / "stage3-amd64-openrc.tar.xz.sha256"
+            calls = []
+
+            def fake_run(cmd, **kwargs):
+                calls.append(cmd)
+                if cmd[0] == "wget":
+                    sig.write_text("deadbeef  stage3-amd64-openrc.tar.xz\n")
+                return 0
+
+            with mock.patch("gentooinstall.run", side_effect=fake_run):
+                checked = verify_sha256(
+                    "https://example.com/stage3-amd64-openrc.tar.xz", target
+                )
+
+            self.assertTrue(checked)
+            self.assertTrue(any(cmd[0] == "sha256sum" for cmd in calls))
+
+    def test_create_swap_file_sets_nocow_before_writing(self):
+        cfg = Config(filesystem="btrfs", swap="file", swap_size="16M")
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir)
+            calls = []
+            with mock.patch("gentooinstall.run", side_effect=lambda cmd, **kw: calls.append(cmd) or 0):
+                create_swap_file(cfg, target)
+
+            chattr_index = next(i for i, cmd in enumerate(calls) if cmd[0] == "chattr")
+            dd_index = next(i for i, cmd in enumerate(calls) if cmd[0] == "dd")
+            self.assertLess(chattr_index, dd_index)
+            self.assertTrue((target / "swapfile").exists())
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ l'installation complète :
 - sélection du profil / bureau (minimal, Xfce, GNOME, KDE Plasma)
 - noyau `gentoo-kernel-bin` et initramfs adapté (LUKS/LVM)
 - création d'un utilisateur non-root, mot de passe, `sudo`
-- chargeur d'amorçage GRUB ou systemd-boot
+- chargeur d'amorçage GRUB
 - finalisation dans le chroot
 
 ## Prérequis
@@ -72,7 +72,6 @@ fonctionnement **non interactif** (`--yes`).
 - `--separate-home` / `--no-separate-home` : partition `/home` dédiée.
 - `--luks` / `--no-luks` : chiffrement LUKS de la racine.
 - `--lvm` / `--no-lvm` : gestion par LVM.
-- `--bootloader {grub,systemd-boot}` : chargeur d'amorçage.
 - `--network-service {netifrc,networkmanager}`, `--network-mode {dhcp,static}`.
 - `--ip`, `--gateway`, `--dns` : réseau statique.
 - `--root-password`, `--user-password`, `--luks-passphrase` : secrets (non interactif).
@@ -97,8 +96,8 @@ sudo python3 gentooinstall.py \
 - Il refuse d'effacer un disque qui héberge le système en cours, sauf avec `--force`.
 - Le disque cible est vérifié comme périphérique bloc valide avant toute opération.
 - Seul **OpenRC** est pris en charge (systemd n'est pas automatisé).
-- Avec LUKS, un `/boot` non chiffré est créé automatiquement (sauf avec systemd-boot,
-  qui utilise l'ESP montée sur `/boot`).
+- Avec LUKS, un `/boot` non chiffré est créé automatiquement (GRUB doit pouvoir
+  lire le noyau sans déchiffrer la racine).
 - Les options de stockage avancé (LUKS/LVM) sont **expérimentales** : testez-les en
   machine virtuelle avant un usage réel.
 
@@ -107,7 +106,7 @@ sudo python3 gentooinstall.py \
 - pensé pour un environnement Gentoo standard x86_64
 - seul OpenRC est pris en charge
 - la signature PGP du stage3 n'est pas vérifiée (seul le SHA256 l'est)
-- les chemins LUKS/LVM et le rendu du bootloader méritent une validation en VM
+- les chemins LUKS/LVM et le rendu du chargeur GRUB méritent une validation en VM
 - les valeurs `swap_size`/`home_size` sont des défauts internes (`4G`/`50G`)
 
 ## Licence
