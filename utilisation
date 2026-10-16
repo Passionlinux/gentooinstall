@@ -8,24 +8,35 @@ lsblk
 
 sudo python3 gentooinstall.py --dry-run --disk /dev/sda --boot-mode auto --yes
 
+Le mode --dry-run ne nécessite pas root : il peut aussi être lancé sans sudo.
+
 3) Lancer une installation réelle en UEFI
 
-sudo python3 gentooinstall.py --disk /dev/nvme0n1 --boot-mode uefi --yes --init openrc
+sudo python3 gentooinstall.py --disk /dev/nvme0n1 --boot-mode uefi --yes
 
 4) Lancer une installation réelle en BIOS/Legacy
 
-sudo python3 gentooinstall.py --disk /dev/sda --boot-mode bios --yes --init openrc
+sudo python3 gentooinstall.py --disk /dev/sda --boot-mode bios --yes
 
 5) Lancer avec une URL de stage3 fournie directement
 
 sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --yes --stage3-url https://distfiles.gentoo.org/releases/amd64/autobuilds/current-stage3-amd64-openrc/stage3-amd64-openrc-20240630T170447Z.tar.xz
 
-6) Utiliser un autre point de montage
+6) Définir le mot de passe root sans interaction
+
+sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --yes --root-password "MonMotDePasse"
+
+Attention : le mot de passe est visible dans l'historique du shell et dans "ps".
+Sans cette option, "passwd" est demandé interactivement dans le chroot.
+
+7) Utiliser un autre point de montage
 
 sudo python3 gentooinstall.py --disk /dev/sda --boot-mode auto --target-dir /mnt/gentoo --yes
 
 Notes importantes
 - Ce script efface le disque sélectionné.
 - Vérifiez bien le disque avant de confirmer.
+- Le script refuse d'effacer un disque qui héberge le système en cours ; utilisez --force uniquement si c'est voulu.
+- Seul OpenRC est pris en charge (systemd n'est pas automatisé).
 - Le mode --dry-run permet de tester la planification sans toucher le système.
-- Le mode auto détecte automatiquement l’environnement UEFI si disponible.
+- Le mode auto détecte automatiquement l'environnement UEFI si disponible.

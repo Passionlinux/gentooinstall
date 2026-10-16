@@ -1,11 +1,16 @@
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from gentooinstall import (
+    build_chroot_script,
     build_partition_paths,
     choose_boot_mode,
+    ensure_clean_target,
+    hash_password,
+    hosts_current_system,
     parse_args,
     partition_suffix_for_device,
     validate_stage3_url,
@@ -54,6 +59,50 @@ class GentooInstallTests(unittest.TestCase):
         self.assertEqual(args.boot_mode, "bios")
         self.assertTrue(args.dry_run)
         self.assertTrue(args.yes)
+        self.assertFalse(args.force)
+        self.assertIsNone(args.root_password)
+
+    def test_validate_stage3_url_rejects_shell_metacharacters(self):
+        with self.assertRaises(ValueError):
+            validate_stage3_url("https://example.com/stage3-amd64-openrc.tar.xz; rm -rf /")
+
+    def test_ensure_clean_target_creates_missing_dir(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir) / "gentoo"
+            ensure_clean_target(target)
+            self.assertTrue(target.is_dir())
+
+    def test_ensure_clean_target_rejects_non_empty_dir(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            target = Path(tmp_dir)
+            (target / "residu").write_text("x")
+            with self.assertRaises(SystemExit):
+                ensure_clean_target(target)
+
+    def test_hosts_current_system_detects_mounted_disk(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            mounts = Path(tmp_dir) / "mounts"
+            mounts.write_text(
+                "/dev/nvme0n1p2 / ext4 rw 0 0\n"
+                "/dev/sda1 /boot ext4 rw 0 0\n"
+            )
+            self.assertTrue(hosts_current_system("/dev/nvme0n1", str(mounts)))
+            self.assertFalse(hosts_current_system("/dev/sdb", str(mounts)))
+
+    def test_build_chroot_script_uses_hash_without_passwd(self):
+        script = build_chroot_script("uefi", "/dev/nvme0n1", "$6$abc$def")
+        self.assertIn("usermod -p '$6$abc$def' root", script)
+        self.assertNotIn("\npasswd", script)
+
+    def test_build_chroot_script_falls_back_to_passwd(self):
+        script = build_chroot_script("bios", "/dev/sda")
+        self.assertIn("\npasswd", script)
+        self.assertIn("grub-install --target=i386-pc /dev/sda", script)
+
+    @unittest.skipUnless(shutil.which("openssl"), "openssl non disponible")
+    def test_hash_password_produces_sha512_crypt(self):
+        hashed = hash_password("un-mot-de-passe")
+        self.assertTrue(hashed.startswith("$6$"))
 
 
 if __name__ == "__main__":
